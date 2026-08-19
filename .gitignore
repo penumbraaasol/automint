@@ -9,3 +9,6 @@ dashboard/
 
 # Personal permission overrides — not for the repo
 .claude/settings.local.json
+
+# Daemon runtime logs
+daemon/*.log

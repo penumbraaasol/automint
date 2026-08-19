@@ -1,141 +1,121 @@
-# Status — 2026-08-19 (updated: autonomous mode)
+# Status — 2026-08-19 (live and autonomous)
 
 An unattended OpenSea SeaDrop mint executor, packaged as a Zerion CLI partner
-skill. Built and verified against live mainnet over one session.
+skill. Built and verified against live mainnet in one session.
 
-## What works
+**It is running.** A launchd daemon scans every 10 minutes and mints without a
+human or a Claude session present. Three real mints have been executed.
 
-Every item below was verified by running it, not by inspection.
+## Live results
 
-| Area | State |
-|---|---|
-| OpenSea MCP server | Connected, 30 tools |
-| OpenSea REST v2 | Authenticated, live data |
-| `watch` | Reconciles OpenSea stage data against the contract |
-| `check` | Classifies stage as public (prebuildable) vs gated |
-| `simulate` | Builds the tx, dry-runs via `eth_call`, decodes reverts |
-| `arm` | Waits, heartbeats, simulates, runs rails, would broadcast |
-| Rails | max-price, max-gas, max-total, cap, balance, chainId, one-shot |
-| Keystore | Web3 Secret Storage v3, verified against the official spec vector |
-| Skill | `.claude/skills/zerion-automint/SKILL.md` |
+| Drop | Chain | Cost | Tx |
+|---|---|---|---|
+| Collectr | base | 0.005601 ETH | `0xaa80a1d9…` (manual, block 50191357) |
+| Collectr | base | 0.005601 ETH | `0x8c531872…` (autonomous, block 50194522) |
+| Gunflower Rising | ethereum | 0.001658 ETH | `0x9714b9e7…` (daemon, block 25792284) |
 
-Full 4-beat demo sequence runs in **~42 seconds**, entirely in dry run.
+Lifetime spend **0.012860 ETH** against a 0.03 budget. The third was chosen,
+armed, and bought by the daemon with no session running.
 
-## Verified findings
+## Architecture
 
-- SeaDrop v1 `0x00005ea00ac477b1030ce78506496e8c2de24bf5` — 21,081 bytes on Base
-- `mintPublic(address,address,address,uint256)` = `0x161ac21f` (computed, matched)
-- Locally built calldata is **byte-identical** to OpenSea's `/drops/{slug}/mint`
-- `POST /drops/{slug}/mint` returns **409 while a stage is inactive** — it cannot
-  be prefetched, so it can never sit in the hot path. Calldata is built locally.
-- Revert `0x13da22f2` identified as `NotActive(uint256,uint256,uint256)`
-- Onchain `getPublicDrop` matches OpenSea's price, window, and per-wallet cap
-- REST returns flat snake_case; the MCP server normalizes to camelCase
+```
+discover  → all three OpenSea drop feeds (105 drops, ~17 actionable)
+scan      → enrich with collection stats + remaining supply, score, rank
+auto      → gate, then arm the survivors
+run       → repeat on an interval, unattended
+```
 
-## Blockers
+Zerion CLI handles funding and verification; the bot handles drop timing,
+calldata, simulation, and rails. Zerion cannot submit the mint itself — none of
+its commands accept arbitrary `to`/`data`/`value` — so the mint signs locally.
 
-### RESOLVED: first live mint executed
+## Gates and rails
 
-Minted 1x Collectr on Base, tx
-`0xaa80a1d973a2b5c101bb624d3f7cbd19aa05ea43b2dc3cfc59c55fb1642cdaae`,
-block 50191357. 0.0056 ETH + $0.002 gas. NFT indexed on OpenSea ~80s later.
-
-### 1. (was) Funding — the live mint has never run
-
-The mint needs **0.0056016 ETH (~$10.71)** on Base. Current state:
-
-| Wallet | Base ETH | Short by |
-|---|---|---|
-| bot `0x844ae723…e128` | 0 | 0.0056016 |
-| treasury-test `0x52Fb9149…8e59` | 0.0016487 | 0.0039529 |
-
-treasury-test holds **176.82 USDC on Ethereum** (verified onchain), so the value
-exists — it is on the wrong chain and in the wrong form.
-
-Two things block moving it automatically:
-
-- `reviewThreshold: 0` on treasury-test routes every transaction to the Zerion
-  web app for human approval. Correct behaviour, but not automatable.
-- Claude Code's permission classifier blocks fund-moving CLI commands, so the
-  bridge/swap must be run by a human.
-
-### 2. Nothing has ever been broadcast
-
-No live mint has been performed. Specifically, the
-`rails all passed → would have sent` path has **never executed**, because every
-dry run so far has stopped at `insufficient balance` first. That path should not
-run for the first time during a recording.
-
-### 3. Gated stages are implemented but untested
-
-No drop in OpenSea's featured feed currently has a non-public active stage, so
-the allowlist / signed-presale fallback has never run end to end. Stage
-classification is tested; the proof path is not.
-
-### 4. Base USDC does not reconcile
-
-Zerion reports ~$7.08 of USDC on Base across five positions, but the canonical
-Base USDC contract (`0x8335…2913`) shows only **1.673847**. The remainder is
-likely bridged variants (USDbC) or held inside protocols, and therefore not
-directly swappable. **The swap-only funding route may not actually work** — this
-needs checking before committing to it over the bridge.
-
-### 5. Ethereum mainnet untested
-
-Everything was exercised on Base, where gas is ~0.007 gwei and a failed mint
-costs fractions of a cent. Those economics say nothing about mainnet behaviour.
-
-## Autonomous mode (new)
-
-`discover` / `scan` / `watch-*` / `auto` close the loop from "you name a drop"
-to "the bot finds one".
-
-- **discover** pulls all three OpenSea feeds (`featured`, `upcoming`,
-  `recently_minted`) -- 105 drops, ~17 actionable. That is the entire
-  discoverable universe; there is no search endpoint.
-- **scan** enriches each with collection stats and ranks them.
-- **auto** discovers, scores, gates, and mints.
-
-### The scoring bug worth knowing about
-
-The first scorer ranked on OpenSea's advertised floor price. That is a
-**listing**, not a trade. Two examples it got badly wrong:
-
-| Collection | Advertised floor | Actually cleared | First score | Corrected |
-|---|---|---|---|---|
-| knuckle-up | 1 ETH | ~0.0015 ETH (13 sales/7d) | 50.5 (#1) | 10.5 |
-| bone-theater | 1 ETH | **nothing in 7d** | 50.3 (#1) | 4.6 |
-
-Both were ranked top picks on the strength of a single unsold listing. The
-scorer now uses the realized clearing price (volume/sales, 7d then 30d) and
-only trusts the floor when the two agree within 3x. A collection with no trades
-in 30 days scores **zero** on economics, not a discounted high number.
-
-This is the difference between a scorer that ranks and one that confidently
-recommends garbage.
-
-### Auto-mode gates
-
-Stacked on top of the per-mint rails, not replacing them:
+Auto-mode gates, stacked on top of the per-mint rails rather than replacing
+them:
 
 | Gate | Default |
 |---|---|
 | dry run unless `--live` | on |
-| `--min-score` | 20 |
-| confidence must be `measured` | enforced -- `unknown` / `untested` refused |
-| `--budget <eth>` across the run | none unless set |
-| `--max-mints` | 1 |
-| one-shot (already minted) | enforced |
+| `--min-score` | 20 (daemon runs 5) |
+| confidence must be `measured` | `unknown` / `untested` refused |
+| sold out | refused |
+| affordable on that drop's chain | refused |
+| already minted (one-shot) | refused |
+| `--budget` across all runs | none unless set |
 
-Verified: with `--budget 0.01` the run stopped because 0.0056 was already spent
-on the real mint, and with the one-shot guard collectr is refused outright.
+Per-mint rails: max price, max gas, max total, balance, chainId, per-wallet cap.
+Every one has been observed firing.
 
-## Next step
+## Bugs found and fixed
 
-Fund the minting wallet, then re-run the dry run against a funded wallet before
-going live. Funding requires a human-approved swap or bridge — see Blocker 1.
+Each was caught by testing, not inspection, and each would have been invisible
+in production.
+
+**The floor price is a listing, not a trade.** The first scorer ranked on
+OpenSea's advertised floor. Two collections advertising a 1 ETH floor ranked #1
+while actually clearing at 0.0015 ETH — or not trading at all. It now uses the
+realized clearing price (volume/sales, 7d then 30d) and trusts the floor only
+when the two agree within 3x. No trades in 30 days scores **zero** on
+economics, not a discounted high number.
+
+**Sold-out drops still show as MINTING.** Three of seventeen actionable drops
+were sold out; the top-ranked pick was one of them. The only other symptom is a
+`MintQuantityExceedsMaxSupply` revert at simulation time, which an unattended
+daemon would rediscover every cycle forever. Remaining supply is now a gate.
+
+**Funds do not travel between chains.** The scorer ranked drops without regard
+to where the money is, so the bot would arm a 0.256 ETH mint (~$490) against a
+0.0029 ETH balance and fail every cycle. Balances and gas are now fetched once
+per run and unaffordable drops rejected up front.
+
+**The budget shared files with the one-shot guard.** Deleting a state file to
+re-arm a drop silently reset the budget to zero — the difference between "mint
+this again" and "spend without limit" for an unattended bot. Spend is now an
+append-only ledger.
+
+**A moving stage could hang the waiter forever.** Fixed with a retarget limit
+and `--max-wait`.
+
+## Verified findings
+
+- SeaDrop v1 `0x00005ea00ac477b1030ce78506496e8c2de24bf5` — same address, and
+  21,081 bytes of bytecode, on both Base and Ethereum
+- `mintPublic(address,address,address,uint256)` = `0x161ac21f` (computed, matched)
+- Locally built calldata is **byte-identical** to OpenSea's mint endpoint
+- `POST /drops/{slug}/mint` returns **409 while a stage is inactive**, so it can
+  never sit in the hot path — calldata is built locally instead
+- Reverts decoded from selectors: `0x13da22f2` = `NotActive(uint256,uint256,uint256)`,
+  `0xe12d2314` = `MintQuantityExceedsMaxSupply(uint256,uint256)`
+- Onchain `getPublicDrop` matches OpenSea's price, window, and per-wallet cap
+- REST returns flat snake_case; the MCP server normalizes to camelCase
+- Keystore decrypts the official Web3 Secret Storage test vector
+
+## Running it
+
+```sh
+./daemon/botctl.sh install     # launchd agent; survives logout and reboot
+./daemon/botctl.sh status | logs | stop | uninstall
+./daemon/botctl.sh spend       # lifetime spend from the ledger
+```
+
+## Known limits
+
+- **Ethereum funds are nearly exhausted** (~0.0012 ETH). Since 16 of 17
+  actionable drops are on Ethereum, top up there, not Base.
+- **The private key is plaintext in `.env`.** It has been on disk unencrypted;
+  rotate it. The encrypted keystore path exists and is preferable.
+- **Gated stages are untested.** No live allowlist stage existed to exercise the
+  OpenSea proof fallback; only the classification is tested.
+- **The scorer ranks observable data. It does not predict value.** Two serious
+  bugs were found in it in a few hours, both of which confidently recommended
+  worthless drops. Treat `--min-score` as a filter, not a judgement.
+- **Zero priority fee.** Transactions are sent without an explicit tip. That
+  confirmed in 3 blocks on a quiet Ethereum (baseFee 0.35 gwei) but would stall
+  when gas is contested.
 
 ## Not in this repo
 
-`.env` (OpenSea API key), `.keystore/` (encrypted wallet), and `.state/`
-(one-shot mint records) are gitignored and must never be committed.
+`.env`, `.keystore/`, `.state/`, `daemon/*.log`, and `.claude/settings.local.json`
+are gitignored and must never be committed.
