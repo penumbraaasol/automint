@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { formatEther, formatGwei, parseEther, parseGwei } from 'viem';
 
 const STATE_DIR = new URL('../.state/', import.meta.url).pathname;
@@ -16,16 +16,30 @@ export function writeState(slug, chainId, state) {
   writeFileSync(stateFile(slug, chainId), JSON.stringify(state, null, 2));
 }
 
-/** Total spent across every recorded run -- backs the session spend cap. */
+/**
+ * Append-only spend ledger.
+ *
+ * Kept separate from the per-drop state files on purpose: those get deleted to
+ * re-arm a drop, and if the budget lived there, clearing the one-shot guard
+ * would silently reset the budget too. For an unattended spender that is the
+ * difference between "mint this again" and "spend without limit".
+ */
+const LEDGER = STATE_DIR + 'spend-ledger.jsonl';
+
+export function recordSpend(entry) {
+  mkdirSync(STATE_DIR, { recursive: true });
+  appendFileSync(LEDGER, JSON.stringify({ ...entry, at: new Date().toISOString() }) + '\n');
+}
+
+/** Lifetime spend. Survives deletion of any per-drop state file. */
 export function totalSpent() {
-  if (!existsSync(STATE_DIR)) return 0n;
-  return readdirSync(STATE_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .reduce((sum, f) => {
-      try {
-        const s = JSON.parse(readFileSync(STATE_DIR + f, 'utf8'));
-        return sum + BigInt(s.spentWei ?? 0);
-      } catch { return sum; }
+  if (!existsSync(LEDGER)) return 0n;
+  return readFileSync(LEDGER, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .reduce((sum, line) => {
+      try { return sum + BigInt(JSON.parse(line).spentWei ?? 0); }
+      catch { return sum; }
     }, 0n);
 }
 

@@ -4,7 +4,7 @@ import { getDrop } from './opensea.js';
 import { resolveChain } from './chains.js';
 import { SEADROP_ABI, ERROR_HINTS, readPublicDrop, readFeeRecipients } from './seadrop.js';
 import { resolveMintTx } from './eligibility.js';
-import { checkRails, parseLimits, readState, writeState } from './rails.js';
+import { checkRails, parseLimits, readState, writeState, recordSpend } from './rails.js';
 import { loadKeystore, decryptKeystore } from './keystore.js';
 import { promptPassword, confirm } from './prompt.js';
 import { duration, iso } from './format.js';
@@ -159,6 +159,7 @@ export async function arm(slug, opts = {}) {
     minter: account.address, quantity, spentWei: rails.total.toString(),
     armedAt: new Date().toISOString(),
   });
+  recordSpend({ slug, chainId, txHash: hash, spentWei: rails.total.toString(), quantity });
   console.log(`\n  SENT  ${hash}`);
   console.log(`  ${explorerTx(drop.chain, hash)}`);
 

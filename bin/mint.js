@@ -15,6 +15,7 @@ import { scoreAll } from '../src/score.js';
 import { renderScanTable, renderDetail } from '../src/report.js';
 import * as watchlist from '../src/watchlist.js';
 import { auto } from '../src/auto.js';
+import { daemon } from '../src/daemon.js';
 import { parseEther } from 'viem';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch {}
@@ -68,6 +69,11 @@ opensea-mint-bot -- SeaDrop mint watcher / simulator / executor
       Discover, score, rank, and mint autonomously. DRY RUN unless --live.
       Refuses any drop whose score rests on no trading data.
       Add --watchlist to restrict to watched slugs only.
+
+  mint run [--interval <sec>] [--budget <eth>] [--live] [--watchlist]
+      Continuous autonomous mode. Re-scans on an interval and mints whatever
+      clears the gates, unattended, without prompting. DRY RUN unless --live.
+      Stops when --budget is exhausted or on ctrl-c.
 
   mint arm <slug> [--quantity <n>] [--live] [--yes]
       Wait for the window, simulate, run rails, then mint.
@@ -217,6 +223,22 @@ async function main() {
       console.log(`  Score ranks observable data. It does not predict value.\n`);
       return;
     }
+
+    case 'run':
+      return daemon({
+        keystore: ks(),
+        interval: Number(flags.interval ?? 300) * 1000,
+        maxCycles: flags.cycles ? Number(flags.cycles) : Infinity,
+        minScore: Number(flags['min-score'] ?? 20),
+        maxMints: Number(flags['max-mints'] ?? 1),
+        budget: flags.budget ?? null,
+        chain: flags.chain ?? null,
+        maxPrice: flags['max-price'] ?? null,
+        quantity: Number(flags.quantity ?? 1),
+        useWatchlist: !!flags.watchlist,
+        live: !!flags.live,
+        maxGasGwei: flags['max-gas-gwei'],
+      });
 
     case 'auto':
       return auto({

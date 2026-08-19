@@ -27,6 +27,9 @@ Mint bot (from the project directory):
 - `node bin/mint.js check <slug> --minter <addr>` — is this stage public or gated
 - `node bin/mint.js simulate <slug> --minter <addr>` — dry-run the tx, never sends
 - `node bin/mint.js arm <slug> [--live]` — wait for the window, then mint
+- `node bin/mint.js scan` — discover, enrich, score, and rank every open drop
+- `node bin/mint.js run [--live]` — continuous autonomous mode: re-scan on an
+  interval and mint whatever clears the gates, unattended, without prompting
 - `node bin/mint.js keygen` — create an encrypted keystore for the bot wallet
 
 Zerion CLI:
