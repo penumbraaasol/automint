@@ -1,4 +1,4 @@
-# Status — 2026-08-19
+# Status — 2026-08-19 (updated: autonomous mode)
 
 An unattended OpenSea SeaDrop mint executor, packaged as a Zerion CLI partner
 skill. Built and verified against live mainnet over one session.
@@ -34,7 +34,13 @@ Full 4-beat demo sequence runs in **~42 seconds**, entirely in dry run.
 
 ## Blockers
 
-### 1. Funding — the live mint has never run
+### RESOLVED: first live mint executed
+
+Minted 1x Collectr on Base, tx
+`0xaa80a1d973a2b5c101bb624d3f7cbd19aa05ea43b2dc3cfc59c55fb1642cdaae`,
+block 50191357. 0.0056 ETH + $0.002 gas. NFT indexed on OpenSea ~80s later.
+
+### 1. (was) Funding — the live mint has never run
 
 The mint needs **0.0056016 ETH (~$10.71)** on Base. Current state:
 
@@ -78,6 +84,51 @@ needs checking before committing to it over the bridge.
 
 Everything was exercised on Base, where gas is ~0.007 gwei and a failed mint
 costs fractions of a cent. Those economics say nothing about mainnet behaviour.
+
+## Autonomous mode (new)
+
+`discover` / `scan` / `watch-*` / `auto` close the loop from "you name a drop"
+to "the bot finds one".
+
+- **discover** pulls all three OpenSea feeds (`featured`, `upcoming`,
+  `recently_minted`) -- 105 drops, ~17 actionable. That is the entire
+  discoverable universe; there is no search endpoint.
+- **scan** enriches each with collection stats and ranks them.
+- **auto** discovers, scores, gates, and mints.
+
+### The scoring bug worth knowing about
+
+The first scorer ranked on OpenSea's advertised floor price. That is a
+**listing**, not a trade. Two examples it got badly wrong:
+
+| Collection | Advertised floor | Actually cleared | First score | Corrected |
+|---|---|---|---|---|
+| knuckle-up | 1 ETH | ~0.0015 ETH (13 sales/7d) | 50.5 (#1) | 10.5 |
+| bone-theater | 1 ETH | **nothing in 7d** | 50.3 (#1) | 4.6 |
+
+Both were ranked top picks on the strength of a single unsold listing. The
+scorer now uses the realized clearing price (volume/sales, 7d then 30d) and
+only trusts the floor when the two agree within 3x. A collection with no trades
+in 30 days scores **zero** on economics, not a discounted high number.
+
+This is the difference between a scorer that ranks and one that confidently
+recommends garbage.
+
+### Auto-mode gates
+
+Stacked on top of the per-mint rails, not replacing them:
+
+| Gate | Default |
+|---|---|
+| dry run unless `--live` | on |
+| `--min-score` | 20 |
+| confidence must be `measured` | enforced -- `unknown` / `untested` refused |
+| `--budget <eth>` across the run | none unless set |
+| `--max-mints` | 1 |
+| one-shot (already minted) | enforced |
+
+Verified: with `--budget 0.01` the run stopped because 0.0056 was already spent
+on the real mint, and with the one-shot guard collectr is refused outright.
 
 ## Next step
 

@@ -10,6 +10,12 @@ import { promptPassword } from '../src/prompt.js';
 import { getDrop } from '../src/opensea.js';
 import { checkEligibility } from '../src/eligibility.js';
 import { readState } from '../src/rails.js';
+import { discoverAll, assessActionability, targetStage } from '../src/discover.js';
+import { scoreAll } from '../src/score.js';
+import { renderScanTable, renderDetail } from '../src/report.js';
+import * as watchlist from '../src/watchlist.js';
+import { auto } from '../src/auto.js';
+import { parseEther } from 'viem';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch {}
 
@@ -43,9 +49,25 @@ opensea-mint-bot -- SeaDrop mint watcher / simulator / executor
       Report which stage is active and whether this wallet is eligible.
 
   mint keygen [--keystore <path>]        Create a new encrypted wallet
-  mint import <0xprivkey> [--keystore]   Import an existing key
+  mint import [--keystore <path>]         Import a key (prompts; never pass it as an argument)
   mint address [--keystore <path>]       Show the keystore's address
   mint status <slug> [--chain-id <id>]   Show one-shot state for a drop
+
+  mint discover [--chain <c>] [--max-price <eth>] [--verbose]
+      Pull every OpenSea drop feed and list what this bot could execute.
+
+  mint scan [--chain <c>] [--max-price <eth>] [--limit <n>] [--detail]
+      Discover, enrich with collection stats, score, and rank.
+
+  mint watch-add <slug> [--quantity <n>] [--max-price <eth>] [--note <s>]
+  mint watch-list
+  mint watch-remove <slug>
+      Manage the persistent watchlist.
+
+  mint auto [--min-score <n>] [--max-mints <n>] [--budget <eth>] [--live]
+      Discover, score, rank, and mint autonomously. DRY RUN unless --live.
+      Refuses any drop whose score rests on no trading data.
+      Add --watchlist to restrict to watched slugs only.
 
   mint arm <slug> [--quantity <n>] [--live] [--yes]
       Wait for the window, simulate, run rails, then mint.
@@ -106,7 +128,12 @@ async function main() {
     }
 
     case 'import': {
-      const pk = positional[0];
+      // Reading the key from argv would leave it in shell history. Prefer stdin.
+      const pk = positional[0] ?? (await promptPassword('Private key (hidden): ')).trim();
+      if (positional[0]) {
+        console.warn('\n  WARNING: the key was passed as an argument and is now in your shell history.');
+        console.warn('  Consider running `history -d` on that entry, or rotate the key.\n');
+      }
       if (!/^0x[0-9a-fA-F]{64}$/.test(pk ?? '')) throw new Error('Provide a 0x-prefixed 32-byte private key');
       const password = await promptPassword('New keystore password: ');
       if (password.length < 8) throw new Error('Password must be at least 8 characters');
@@ -147,6 +174,88 @@ async function main() {
         cap: flags.cap,
         attribute: !flags['no-attribution'],
       });
+
+    case 'discover': {
+      const { drops, errors } = await discoverAll();
+      for (const e of errors) console.error(`  feed error: ${e}`);
+      const maxPriceWei = flags['max-price'] ? parseEther(String(flags['max-price'])) : null;
+      const chains = flags.chain ? [flags.chain] : undefined;
+      const assessed = drops.map((d) => ({ drop: d, ...assessActionability(d, { chains, maxPriceWei }) }));
+      const ok = assessed.filter((a) => a.actionable);
+      console.log(`\n  discovered ${drops.length} drops across all OpenSea feeds`);
+      console.log(`  actionable: ${ok.length}\n`);
+      for (const a of ok) {
+        const st = a.stage;
+        console.log(`   + ${a.drop.slug.padEnd(34)} ${String(a.drop.chain).padEnd(10)} ${st?.isOpen ? 'OPEN' : 'scheduled'}`);
+      }
+      if (flags.verbose) {
+        console.log('\n  not actionable:');
+        for (const a of assessed.filter((x) => !x.actionable)) {
+          console.log(`   - ${a.drop.slug.padEnd(34)} ${a.reasons.join('; ')}`);
+        }
+      }
+      console.log();
+      return;
+    }
+
+    case 'scan': {
+      const { drops, errors } = await discoverAll();
+      for (const e of errors) console.error(`  feed error: ${e}`);
+      const maxPriceWei = flags['max-price'] ? parseEther(String(flags['max-price'])) : null;
+      const chains = flags.chain ? [flags.chain] : undefined;
+      const ok = drops.map((d) => ({ drop: d, ...assessActionability(d, { chains, maxPriceWei }) }))
+                      .filter((a) => a.actionable)
+                      .map(({ drop, stage }) => ({ drop, stage }));
+      if (!ok.length) { console.log('\n  no actionable drops found\n'); return; }
+      console.log(`\n  scoring ${ok.length} actionable drops...`);
+      const scored = await scoreAll(ok);
+      renderScanTable(scored, { limit: Number(flags.limit ?? 20) });
+      if (flags.detail) {
+        for (const r of scored.slice(0, Number(flags.detail === true ? 3 : flags.detail))) renderDetail(r);
+      }
+      console.log(`\n  'measured' = has trading history. 'unknown' = new collection, no signal.`);
+      console.log(`  Score ranks observable data. It does not predict value.\n`);
+      return;
+    }
+
+    case 'auto':
+      return auto({
+        keystore: ks(),
+        minScore: Number(flags['min-score'] ?? 20),
+        maxMints: Number(flags['max-mints'] ?? 1),
+        budget: flags.budget ?? null,
+        chain: flags.chain ?? null,
+        maxPrice: flags['max-price'] ?? null,
+        quantity: Number(flags.quantity ?? 1),
+        useWatchlist: !!flags.watchlist,
+        live: !!flags.live,
+        maxGasGwei: flags['max-gas-gwei'],
+        cap: flags.cap,
+      });
+
+    case 'watch-add': {
+      if (!slug) throw new Error('slug required');
+      const r = watchlist.add(slug, { quantity: Number(flags.quantity ?? 1), maxPrice: flags['max-price'] ?? null, note: flags.note ?? null });
+      console.log(r.added ? `\n  watching ${slug}\n` : `\n  ${slug}: ${r.reason}\n`);
+      return;
+    }
+
+    case 'watch-list': {
+      const wl = watchlist.load();
+      if (!wl.entries.length) { console.log('\n  watchlist empty\n'); return; }
+      console.log();
+      for (const e of wl.entries) {
+        console.log(`  ${e.slug.padEnd(34)} qty ${e.quantity}  ${e.maxPrice ? `max ${e.maxPrice} ETH` : 'no price limit'}${e.note ? `  -- ${e.note}` : ''}`);
+      }
+      console.log();
+      return;
+    }
+
+    case 'watch-remove': {
+      if (!slug) throw new Error('slug required');
+      console.log(watchlist.remove(slug).removed ? `\n  removed ${slug}\n` : `\n  ${slug} not on watchlist\n`);
+      return;
+    }
 
     default:
       console.log(USAGE);

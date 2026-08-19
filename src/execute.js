@@ -35,11 +35,26 @@ export async function arm(slug, opts = {}) {
   console.log(`\n${drop.collectionName} (${slug}) on ${drop.chain} [chainId ${chainId}]`);
   console.log(`  contract  ${drop.contractAddress}`);
 
-  // Unlock before waiting, so a bad password fails now rather than at the open.
-  const keystore = loadKeystore(ksPath);
-  const account = privateKeyToAccount(
-    decryptKeystore(keystore, await promptPassword())
-  );
+  // Unlock before waiting, so a bad key/password fails now, not at the open.
+  //
+  // MINT_PRIVATE_KEY is a plaintext escape hatch for when a key cannot be moved
+  // into the keystore (e.g. the source wallet's passphrase is unrecoverable).
+  // It is strictly less safe than the keystore -- the key sits unencrypted on
+  // disk -- so it announces itself loudly rather than working silently.
+  let account;
+  const envKey = process.env.MINT_PRIVATE_KEY ?? process.env.TREASURY_TEST_PRIVATE_KEY;
+  if (envKey) {
+    const pk = envKey.trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(pk)) {
+      throw new Error('Private key env var is set but is not a 0x-prefixed 32-byte key');
+    }
+    account = privateKeyToAccount(pk);
+    console.log('  WARNING   signing from a plaintext key in .env, not the keystore');
+  } else {
+    account = privateKeyToAccount(
+      decryptKeystore(loadKeystore(ksPath), await promptPassword())
+    );
+  }
   console.log(`  wallet    ${account.address}`);
 
   const wallet = createWalletClient({ account, chain, transport });
