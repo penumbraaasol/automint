@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.automint.bot</string>
+
+  <!-- Absolute paths: launchd does not read your shell profile. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/annaufaeva/opensea/bin/mint.js</string>
+    <string>run</string>
+    <string>--live</string>
+    <string>--interval</string>
+    <string>600</string>
+    <string>--min-score</string>
+    <string>5</string>
+    <string>--budget</string>
+    <string>0.03</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/annaufaeva/opensea</string>
+
+  <!-- Restart if it exits, so a crash does not silently end the run. -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/annaufaeva/opensea/daemon/automint.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/annaufaeva/opensea/daemon/automint.error.log</string>
+</dict>
+</plist>

@@ -143,14 +143,34 @@ export function scoreDrop({ drop, stage, stats }) {
   };
 }
 
+/**
+ * Remaining supply, from the per-drop endpoint.
+ *
+ * OpenSea's feed keeps listing a drop as MINTING after it sells out, and the
+ * only symptom otherwise is a MintQuantityExceedsMaxSupply revert at simulation
+ * time -- which an unattended daemon would rediscover every cycle forever.
+ */
+async function getSupply(slug) {
+  try {
+    const { getDrop } = await import('./opensea.js');
+    const d = await getDrop(slug);
+    const total = Number(d.totalSupply), max = Number(d.maxSupply);
+    if (!Number.isFinite(total) || !Number.isFinite(max)) return null;
+    return { total, max, remaining: max - total, soldOut: max - total <= 0 };
+  } catch { return null; }
+}
+
 /** Enrich and score a list of drops, in parallel but politely. */
 export async function scoreAll(drops, { concurrency = 5 } = {}) {
   const out = [];
   for (let i = 0; i < drops.length; i += concurrency) {
     const batch = drops.slice(i, i + concurrency);
     const scored = await Promise.all(batch.map(async ({ drop, stage }) => {
-      const stats = await getStats(drop.slug).catch(() => null);
-      return { drop, stage, stats, ...scoreDrop({ drop, stage, stats }) };
+      const [stats, supply] = await Promise.all([
+        getStats(drop.slug).catch(() => null),
+        getSupply(drop.slug),
+      ]);
+      return { drop, stage, stats, supply, ...scoreDrop({ drop, stage, stats }) };
     }));
     out.push(...scored);
   }

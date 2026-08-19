@@ -6,3 +6,6 @@ node_modules/
 
 # Separate project — lives in its own repo
 dashboard/
+
+# Personal permission overrides — not for the repo
+.claude/settings.local.json

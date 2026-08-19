@@ -6,6 +6,54 @@ import { arm } from './execute.js';
 import { totalSpent, readState } from './rails.js';
 import * as watchlist from './watchlist.js';
 import { resolveChain, CHAINS } from './chains.js';
+import { createPublicClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { loadKeystore } from './keystore.js';
+
+/**
+ * The minting address, resolved WITHOUT unlocking anything: a v3 keystore
+ * records its address in plaintext, and an env key derives directly. Balance
+ * checks must not need a password.
+ */
+function resolveMinter(keystorePath) {
+  const envKey = process.env.MINT_PRIVATE_KEY ?? process.env.TREASURY_TEST_PRIVATE_KEY;
+  if (envKey && /^0x[0-9a-fA-F]{64}$/.test(envKey.trim())) {
+    return privateKeyToAccount(envKey.trim()).address;
+  }
+  try {
+    const ks = loadKeystore(keystorePath);
+    return ks.address ? `0x${ks.address}` : null;
+  } catch { return null; }
+}
+
+/**
+ * Per-chain spendable balance and gas, fetched once per run.
+ *
+ * Without this the bot happily ranks a drop on a chain it cannot pay for, arms
+ * it, and only discovers the problem inside the balance rail -- once per cycle,
+ * forever. An unattended daemon then spins every interval achieving nothing.
+ */
+async function chainFunds(minter, chains) {
+  const out = new Map();
+  await Promise.all([...new Set(chains)].map(async (name) => {
+    const entry = CHAINS[name];
+    if (!entry) return;
+    try {
+      const client = createPublicClient({
+        chain: entry.chain,
+        transport: http(process.env[entry.rpcEnv] || undefined),
+      });
+      const [balance, fees] = await Promise.all([
+        client.getBalance({ address: minter }),
+        client.estimateFeesPerGas().catch(() => null),
+      ]);
+      // 181412 is the observed mintPublic gas; pad 30% for variance.
+      const gas = fees?.maxFeePerGas ? (181412n * fees.maxFeePerGas * 13n) / 10n : 0n;
+      out.set(name, { balance, gas });
+    } catch { /* unreachable chain: treated as unknown, not as broke */ }
+  }));
+  return out;
+}
 
 /**
  * Autonomous mode: discover, score, rank, then mint the survivors.
@@ -59,10 +107,18 @@ export async function auto(opts = {}) {
   // --- score -------------------------------------------------------------
   const scored = await scoreAll(candidates);
 
+  // --- per-chain funds ----------------------------------------------------
+  const minter = opts.minterAddress ?? resolveMinter(opts.keystore);
+  const funds = minter
+    ? await chainFunds(minter, scored.map((r) => r.drop.chain))
+    : new Map();
+
   // --- gate --------------------------------------------------------------
   const rejected = [];
   const passed = [];
   for (const r of scored) {
+    // Sold out: OpenSea still says MINTING, the contract disagrees.
+    if (r.supply?.soldOut) { rejected.push([r, `SOLD OUT (${r.supply.total}/${r.supply.max})`]); continue; }
     if (r.confidence !== 'measured') { rejected.push([r, `confidence '${r.confidence}' -- refuse to buy on no data`]); continue; }
     if (r.score < minScore) { rejected.push([r, `score ${r.score} < ${minScore}`]); continue; }
     // State files are keyed by chainId, so resolve it rather than guessing.
@@ -70,6 +126,16 @@ export async function auto(opts = {}) {
     const prior = chainId != null ? readState(r.drop.slug, chainId) : null;
     if (prior?.status === 'confirmed') { rejected.push([r, `already minted (${prior.txHash.slice(0, 12)}...)`]); continue; }
     if (prior?.status === 'pending') { rejected.push([r, 'previous attempt unresolved']); continue; }
+
+    // Affordability on the drop's own chain -- funds do not travel.
+    const f = funds.get(r.drop.chain);
+    if (f && r.mintEth != null) {
+      const need = parseEther(String(r.mintEth)) * BigInt(quantity) + f.gas;
+      if (f.balance < need) {
+        rejected.push([r, `insufficient ${r.drop.chain} funds: have ${formatEther(f.balance)}, need ${formatEther(need)}`]);
+        continue;
+      }
+    }
     passed.push(r);
   }
 
