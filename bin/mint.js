@@ -36,6 +36,24 @@ for (let i = 1; i < argv.length; i++) {
   } else positional.push(a);
 }
 
+/**
+ * Accept a full OpenSea URL wherever a slug is expected.
+ *
+ *   https://opensea.io/collection/foo/overview  ->  foo
+ *   https://opensea.io/collection/0xabc.../drop ->  0xabc...
+ *
+ * People paste links, not slugs.
+ */
+function normalizeSlug(input) {
+  if (!input) return input;
+  const m = String(input).match(/opensea\.io\/collection\/([^/?#]+)/i);
+  if (m) return decodeURIComponent(m[1]);
+  // Also tolerate an item URL: /assets/<chain>/<contract>/<id>
+  const a = String(input).match(/opensea\.io\/assets\/[^/]+\/([^/?#]+)/i);
+  if (a) return a[1];
+  return input;
+}
+
 const DEFAULT_KEYSTORE = new URL('../.keystore/mint.json', import.meta.url).pathname;
 const ks = () => flags.keystore || DEFAULT_KEYSTORE;
 
@@ -95,7 +113,7 @@ opensea-mint-bot -- SeaDrop mint watcher / simulator / executor
 `;
 
 async function main() {
-  const slug = positional[0];
+  const slug = normalizeSlug(positional[0]);
 
   switch (cmd) {
     case 'watch':
