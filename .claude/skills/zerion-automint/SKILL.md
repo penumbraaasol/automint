@@ -25,6 +25,8 @@ the drop (stage timing, calldata, simulation, rails). Neither does the job alone
 Mint bot (from the project directory):
 - `node bin/mint.js watch <slug>` — drop stages, reconciled against the contract
 - `node bin/mint.js check <slug> --minter <addr>` — is this stage public or gated
+- `node bin/mint.js analyze <slug>` — assess a named drop and give a reasoned
+  verdict: what argues for it, what argues against, and what cannot be known
 - `node bin/mint.js simulate <slug> --minter <addr>` — dry-run the tx, never sends
 - `node bin/mint.js arm <slug> [--live]` — wait for the window, then mint
 - `node bin/mint.js scan` — discover, enrich, score, and rank every open drop

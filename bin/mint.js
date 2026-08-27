@@ -17,6 +17,7 @@ import * as watchlist from '../src/watchlist.js';
 import { auto } from '../src/auto.js';
 import { daemon } from '../src/daemon.js';
 import { reconcilePending } from '../src/reconcile.js';
+import { analyze, renderAnalysis } from '../src/analyze.js';
 import { parseEther } from 'viem';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch {}
@@ -55,6 +56,7 @@ opensea-mint-bot -- SeaDrop mint watcher / simulator / executor
   mint address [--keystore <path>]       Show the keystore's address
   mint status <slug> [--chain-id <id>]   Show one-shot state for a drop
   mint reconcile                         Resolve attempts stuck on 'pending'
+  mint analyze <slug>                    Assess a drop and give a reasoned verdict
 
   mint discover [--chain <c>] [--max-price <eth>] [--verbose]
       Pull every OpenSea drop feed and list what this bot could execute.
@@ -77,7 +79,7 @@ opensea-mint-bot -- SeaDrop mint watcher / simulator / executor
       clears the gates, unattended, without prompting. DRY RUN unless --live.
       Stops when --budget is exhausted or on ctrl-c.
 
-  mint arm <slug> [--quantity <n>] [--live] [--yes]
+  mint arm <slug> [--quantity <n>] [--live] [--yes] [--no-analysis]
       Wait for the window, simulate, run rails, then mint.
       DRY RUN unless --live is passed.
 
@@ -157,6 +159,14 @@ async function main() {
       return;
     }
 
+    case 'analyze': {
+      if (!slug) throw new Error('slug required');
+      const a = await analyze(slug, { quantity: Number(flags.quantity ?? 1) });
+      console.log(renderAnalysis(a));
+      console.log();
+      return;
+    }
+
     case 'reconcile': {
       console.log('\n  checking unresolved attempts against the chain...');
       const r = await reconcilePending();
@@ -175,6 +185,7 @@ async function main() {
       if (!slug) throw new Error('slug required');
       return arm(slug, {
         keystore: ks(),
+        explain: !flags['no-analysis'],
         quantity: Number(flags.quantity ?? 1),
         live: !!flags.live,
         yes: !!flags.yes,

@@ -26,6 +26,17 @@ export async function arm(slug, opts = {}) {
     heartbeat = null, maxWait = 24 * 3600_000,
   } = opts;
 
+  // When a human names a drop, say what we think of it before spending their
+  // money. Auto mode skips this -- it prints its own scored breakdown.
+  if (opts.explain) {
+    try {
+      const { analyze, renderAnalysis } = await import('./analyze.js');
+      console.log(renderAnalysis(await analyze(slug, { quantity })));
+    } catch (e) {
+      console.log(`  (analysis unavailable: ${e.shortMessage ?? e.message})`);
+    }
+  }
+
   const drop = await getDrop(slug);
   const { chain, rpcEnv } = resolveChain(drop.chain);
   const transport = http(process.env[rpcEnv] || undefined);
