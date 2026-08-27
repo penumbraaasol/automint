@@ -2,6 +2,7 @@ import { formatEther, parseEther } from 'viem';
 import { auto } from './auto.js';
 import { totalSpent } from './rails.js';
 import { iso, duration } from './format.js';
+import { reconcilePending } from './reconcile.js';
 
 /**
  * Continuous autonomous mode.
@@ -40,6 +41,15 @@ export async function daemon(opts = {}) {
   };
   process.on('SIGINT', onSig);
   process.on('SIGTERM', onSig);
+
+  // A previous run may have been suspended between broadcast and receipt,
+  // leaving a state file stuck on `pending` that blocks its drop forever.
+  console.log('\n  reconciling any unresolved attempts...');
+  const rec = await reconcilePending().catch((e) => {
+    console.error(`  reconcile failed: ${e.shortMessage ?? e.message}`);
+    return { checked: 0, resolved: [] };
+  });
+  if (!rec.checked) console.log('  none pending');
 
   while (!stopping && cycle < maxCycles) {
     cycle++;

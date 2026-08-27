@@ -16,6 +16,7 @@ import { renderScanTable, renderDetail } from '../src/report.js';
 import * as watchlist from '../src/watchlist.js';
 import { auto } from '../src/auto.js';
 import { daemon } from '../src/daemon.js';
+import { reconcilePending } from '../src/reconcile.js';
 import { parseEther } from 'viem';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch {}
@@ -53,6 +54,7 @@ opensea-mint-bot -- SeaDrop mint watcher / simulator / executor
   mint import [--keystore <path>]         Import a key (prompts; never pass it as an argument)
   mint address [--keystore <path>]       Show the keystore's address
   mint status <slug> [--chain-id <id>]   Show one-shot state for a drop
+  mint reconcile                         Resolve attempts stuck on 'pending'
 
   mint discover [--chain <c>] [--max-price <eth>] [--verbose]
       Pull every OpenSea drop feed and list what this bot could execute.
@@ -152,6 +154,13 @@ async function main() {
     case 'address': {
       const k = loadKeystore(ks());
       console.log(`\n  0x${k.address}   (${ks()})\n`);
+      return;
+    }
+
+    case 'reconcile': {
+      console.log('\n  checking unresolved attempts against the chain...');
+      const r = await reconcilePending();
+      console.log(r.checked ? `\n  ${r.checked} checked, ${r.resolved.length} resolved\n` : '  none pending\n');
       return;
     }
 
