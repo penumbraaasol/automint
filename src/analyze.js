@@ -2,7 +2,7 @@ import { createPublicClient, http, formatEther } from 'viem';
 import { getDrop } from './opensea.js';
 import { resolveChain } from './chains.js';
 import { readPublicDrop } from './seadrop.js';
-import { getStats, scoreDrop } from './score.js';
+import { getStats, getBestOffer, scoreDrop } from './score.js';
 import { classifyStage } from './eligibility.js';
 import { targetStage } from './discover.js';
 import { duration, iso } from './format.js';
@@ -40,11 +40,12 @@ export async function analyze(slug, { minter = null, quantity = 1 } = {}) {
   const cls = classifyStage(stage);
   const otherStages = (drop.stages ?? []).filter((s) => s.stageType !== 'public_sale');
   const stats = await getStats(slug).catch(() => null);
+  const offers = await getBestOffer(slug).catch(() => null);
 
   let onchain = null;
   try { onchain = await readPublicDrop(client, drop.contractAddress); } catch { /* not configured */ }
 
-  const scored = scoreDrop({ drop, stage, stats });
+  const scored = scoreDrop({ drop, stage, stats, offers });
   const total = Number(drop.totalSupply), max = Number(drop.maxSupply);
   const remaining = Number.isFinite(total) && Number.isFinite(max) ? max - total : null;
   const soldOut = remaining != null && remaining <= 0;
@@ -62,6 +63,28 @@ export async function analyze(slug, { minter = null, quantity = 1 } = {}) {
     } else if (scored.ratio != null && scored.ratio < 1) {
       against.push(`underwater: recent sales clear BELOW the mint price (${scored.ratio.toFixed(2)}x)`);
     }
+  }
+
+  // --- the bid side ------------------------------------------------------
+  if (offers?.hasBids && scored.exitRatio != null) {
+    if (scored.exitRatio >= 1) {
+      forIt.push(
+        `you could sell it today: best live bid ${offers.best} ${offers.symbol} `
+        + `($${offers.bestUsd?.toFixed(2)}) is ${scored.exitRatio.toFixed(2)}x the mint`
+      );
+    } else {
+      against.push(
+        `EXIT UNDERWATER: the best live bid is only ${offers.best} ${offers.symbol} `
+        + `($${offers.bestUsd?.toFixed(2)}), ${(1 / scored.exitRatio).toFixed(1)}x less than the mint costs`
+      );
+    }
+    if (offers.depth <= 2) against.push(`thin bid book -- only ${offers.depth} outstanding offer(s)`);
+  } else if (offers && !offers.hasBids && priceEth > 0) {
+    against.push(
+      scored.confidence === 'measured'
+        ? 'NO live bids at any price, despite trading history -- there is nothing to sell into'
+        : 'no live bids yet'
+    );
   }
 
   // --- demand evidence ---------------------------------------------------
@@ -107,6 +130,15 @@ export async function analyze(slug, { minter = null, quantity = 1 } = {}) {
       + (scored.confidence === 'unknown'
         ? 'There is no data to judge the collection itself -- you are betting on the drop, not on evidence.'
         : 'The collection has some history to look at.');
+  } else if (offers && !offers.hasBids && scored.confidence === 'measured') {
+    // Traded before, nobody bidding now. The strongest negative available.
+    verdict = 'NO EXIT';
+    rationale = 'This collection has traded, yet there is not one live bid at any price. '
+      + 'Whatever you pay to mint, there is currently nobody to sell it to.';
+  } else if (scored.exitRatio != null && scored.exitRatio < 1) {
+    verdict = 'EXIT UNDERWATER';
+    rationale = `The best live bid is ${(1 / scored.exitRatio).toFixed(1)}x below the mint price. `
+      + 'You would be buying above the only price anyone is actually offering.';
   } else if (scored.confidence !== 'measured') {
     verdict = 'UNKNOWABLE';
     rationale = 'This costs real money and there is no trading data to justify it. '

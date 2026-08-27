@@ -261,6 +261,14 @@ Scoring on the floor ranked both #1. This bot uses the realised clearing price
 (volume ÷ sales, 7d falling back to 30d) and trusts the floor only when the two
 agree within 3×.
 
+**A floor without bids is not a price.** The strongest valuation signal is the
+*bid* side — `/collections/{slug}/offer_aggregates` returns live collection
+offers, which are escrowed WETH somebody will pay right now. A floor costs
+nothing to post; a bid does not. Scoring on floors and realized sales, this bot
+minted 14 NFTs across 13 collections; when the bid side was added afterwards,
+**every one scored negative** — either no live bids at all, or a best bid up to
+19x below what the mint cost. Check what you could sell into before buying.
+
 **A sold-out drop still reports `MINTING`.** Three of seventeen actionable
 drops in one scan were sold out, including the top-ranked pick. The only other
 symptom is a `MintQuantityExceedsMaxSupply` revert at simulation time — which

@@ -120,6 +120,14 @@ export async function auto(opts = {}) {
     // Sold out: OpenSea still says MINTING, the contract disagrees.
     if (r.supply?.soldOut) { rejected.push([r, `SOLD OUT (${r.supply.total}/${r.supply.max})`]); continue; }
     if (r.confidence !== 'measured') { rejected.push([r, `confidence '${r.confidence}' -- refuse to buy on no data`]); continue; }
+    // The exit gate. Everything this bot bought before it existed is now
+    // unsellable: 14 mints, not one with a bid above what was paid.
+    if (r.mintEth > 0 && r.offers && !r.offers.hasBids) {
+      rejected.push([r, 'NO live bids -- nothing to sell into']); continue;
+    }
+    if (r.exitRatio != null && r.exitRatio < 1) {
+      rejected.push([r, `exit underwater: best bid is ${(1 / r.exitRatio).toFixed(1)}x below mint`]); continue;
+    }
     if (r.score < minScore) { rejected.push([r, `score ${r.score} < ${minScore}`]); continue; }
     // State files are keyed by chainId, so resolve it rather than guessing.
     const chainId = CHAINS[r.drop.chain]?.chain.id ?? null;

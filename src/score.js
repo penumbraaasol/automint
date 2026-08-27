@@ -37,7 +37,7 @@ export async function getStats(slug) {
  *
  * Every component is returned so a ranking can be audited rather than trusted.
  */
-export function scoreDrop({ drop, stage, stats }) {
+export function scoreDrop({ drop, stage, stats, offers = null }) {
   const components = [];
   const flags = [];
   const mintWei = stage?.price != null ? BigInt(stage.price) : null;
@@ -99,6 +99,50 @@ export function scoreDrop({ drop, stage, stats }) {
     components.push({ name: 'economics', detail: 'no history -- unmeasurable', points: 0 });
   }
 
+  // --- 1b. The bid side: what could we actually exit into? -----------------
+  //
+  // Weighted heavily because it is the only signal that cannot be posted for
+  // free. Everything else -- floor, listings -- is what sellers *want*.
+  let exitRatio = null;
+  if (offers && mintEth != null && mintEth > 0) {
+    if (!offers.hasBids) {
+      const severity = hasHistory ? -25 : -10;   // no bids on a traded collection is damning
+      components.push({
+        name: 'bids',
+        detail: hasHistory
+          ? 'NO live bids despite trading history -- nothing to sell into'
+          : 'no live bids yet (new collection)',
+        points: severity,
+      });
+      if (hasHistory) flags.push('nobody is bidding on this collection at any price');
+    } else {
+      exitRatio = offers.best / mintEth;
+      const pts = Math.max(-35, Math.min(35, Math.log2(exitRatio) * 14));
+      components.push({
+        name: 'best bid/mint',
+        detail: `${exitRatio.toFixed(2)}x -- best live bid ${offers.best} ${offers.symbol}`
+          + ` ($${offers.bestUsd?.toFixed(2)}) vs mint ${mintEth}`,
+        points: pts,
+      });
+      if (exitRatio < 1) {
+        flags.push(
+          `EXIT UNDERWATER: best live bid is ${offers.best} ${offers.symbol} `
+          + `($${offers.bestUsd?.toFixed(2)}) but the mint costs ${mintEth} ETH -- `
+          + `you could not sell this for what you paid`
+        );
+      }
+      if (offers.depth <= 2) flags.push(`thin bid book: only ${offers.depth} offer(s) outstanding`);
+    }
+  } else if (offers && mintEth === 0) {
+    components.push({
+      name: 'bids',
+      detail: offers.hasBids
+        ? `best live bid ${offers.best} ${offers.symbol} on a free mint`
+        : 'no live bids, but the mint is free',
+      points: offers.hasBids ? 15 : 0,
+    });
+  }
+
   // --- 2. Liquidity: is anyone actually trading it -------------------------
   if (hasHistory) {
     const v7 = stats.sevenDay?.volume ?? 0;
@@ -136,10 +180,54 @@ export function scoreDrop({ drop, stage, stats }) {
   return {
     score: Math.round(total * 10) / 10,
     confidence: !hasHistory ? 'unknown' : realized == null ? 'untested' : 'measured',
+    exitRatio,
+    offers,
     components,
     flags,
     ratio,
     mintEth,
+  };
+}
+
+/**
+ * Live collection offers — the bid side of the book.
+ *
+ * This is the strongest valuation signal available and the one the first
+ * scorer was missing entirely. A floor is an *ask*: what a holder hopes to
+ * get, costing them nothing to post. A collection offer is a *bid*: escrowed
+ * WETH someone will pay right now. It is the price you could actually exit
+ * into, and unlike a listing it cannot be faked for free.
+ *
+ * The gap is not academic. Collections this bot minted showed healthy floors
+ * and realized prices while carrying best bids of $0.50 -- or no bids at all.
+ */
+export async function getBestOffer(slug) {
+  const res = await fetch(`${BASE_URL}/collections/${slug}/offer_aggregates?limit=20`, {
+    headers: { 'x-api-key': process.env.OPENSEA_API_KEY, accept: 'application/json' },
+  });
+  if (!res.ok) return null;
+  const j = await res.json();
+  const buckets = (j.offer_aggregates ?? [])
+    .map((a) => ({
+      price: Number(a.offer_price?.token_unit ?? 0),
+      symbol: a.offer_price?.symbol ?? 'WETH',
+      usd: Number(a.offer_price?.usd_price ?? 0),
+      offers: Number(a.total_offers ?? 0),
+      bidders: (a.bidders ?? []).length,
+    }))
+    .filter((b) => b.price > 0)
+    .sort((a, b) => b.price - a.price);
+
+  if (!buckets.length) return { hasBids: false, best: 0, depth: 0, bidders: 0, buckets: [] };
+
+  return {
+    hasBids: true,
+    best: buckets[0].price,
+    bestUsd: buckets[0].usd,
+    symbol: buckets[0].symbol,
+    depth: buckets.reduce((n, b) => n + b.offers, 0),
+    bidders: new Set(buckets.flatMap((b) => Array(b.bidders).fill(0))).size || buckets[0].bidders,
+    buckets: buckets.slice(0, 5),
   };
 }
 
@@ -166,11 +254,12 @@ export async function scoreAll(drops, { concurrency = 5 } = {}) {
   for (let i = 0; i < drops.length; i += concurrency) {
     const batch = drops.slice(i, i + concurrency);
     const scored = await Promise.all(batch.map(async ({ drop, stage }) => {
-      const [stats, supply] = await Promise.all([
+      const [stats, supply, offers] = await Promise.all([
         getStats(drop.slug).catch(() => null),
         getSupply(drop.slug),
+        getBestOffer(drop.slug).catch(() => null),
       ]);
-      return { drop, stage, stats, supply, ...scoreDrop({ drop, stage, stats }) };
+      return { drop, stage, stats, supply, ...scoreDrop({ drop, stage, stats, offers }) };
     }));
     out.push(...scored);
   }
