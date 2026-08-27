@@ -37,7 +37,7 @@ export async function getStats(slug) {
  *
  * Every component is returned so a ranking can be audited rather than trusted.
  */
-export function scoreDrop({ drop, stage, stats, offers = null }) {
+export function scoreDrop({ drop, stage, stats, offers = null, supply = null }) {
   const components = [];
   const flags = [];
   const mintWei = stage?.price != null ? BigInt(stage.price) : null;
@@ -175,6 +175,18 @@ export function scoreDrop({ drop, stage, stats, offers = null }) {
     flags.push('very high per-wallet cap suggests unlimited supply');
   }
 
+  // Sold out is disqualifying, not a deduction. Leaving a high score on an
+  // unbuyable drop puts it top of `scan` -- observed: a sold-out collection
+  // ranked #1 at 77.6 while everything mintable scored below zero.
+  if (supply?.soldOut) {
+    components.push({
+      name: 'SOLD OUT',
+      detail: `${supply.total}/${supply.max} -- cannot be minted at any price`,
+      points: -1000,
+    });
+    flags.push('SOLD OUT -- this drop cannot be minted');
+  }
+
   const total = components.reduce((s, c) => s + c.points, 0);
 
   return {
@@ -259,7 +271,7 @@ export async function scoreAll(drops, { concurrency = 5 } = {}) {
         getSupply(drop.slug),
         getBestOffer(drop.slug).catch(() => null),
       ]);
-      return { drop, stage, stats, supply, ...scoreDrop({ drop, stage, stats, offers }) };
+      return { drop, stage, stats, supply, offers, ...scoreDrop({ drop, stage, stats, offers, supply }) };
     }));
     out.push(...scored);
   }

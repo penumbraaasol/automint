@@ -45,7 +45,10 @@ export async function analyze(slug, { minter = null, quantity = 1 } = {}) {
   let onchain = null;
   try { onchain = await readPublicDrop(client, drop.contractAddress); } catch { /* not configured */ }
 
-  const scored = scoreDrop({ drop, stage, stats, offers });
+  const totalS = Number(drop.totalSupply), maxS = Number(drop.maxSupply);
+  const supplyInfo = Number.isFinite(totalS) && Number.isFinite(maxS)
+    ? { total: totalS, max: maxS, soldOut: maxS - totalS <= 0 } : null;
+  const scored = scoreDrop({ drop, stage, stats, offers, supply: supplyInfo });
   const total = Number(drop.totalSupply), max = Number(drop.maxSupply);
   const remaining = Number.isFinite(total) && Number.isFinite(max) ? max - total : null;
   const soldOut = remaining != null && remaining <= 0;
