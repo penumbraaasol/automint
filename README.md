@@ -8,7 +8,9 @@ mint window, simulates the transaction, runs a set of safety rails, and only
 then mints. It runs as a background daemon, so it can act on a window that
 opens at 4am with nobody watching.
 
-Supports **Base**, **Ethereum**, and **Robinhood Chain**.
+Supports **Ethereum**, **Base**, **Robinhood Chain**, **Shape**, **ApeChain**,
+and **Avalanche** — every chain OpenSea serves SeaDrop drops on where the
+protocol is actually deployed.
 
 ---
 
@@ -162,6 +164,38 @@ matters, run it somewhere that does not sleep, or hold sleep off with
 `caffeinate -s -i` while on AC power.
 
 ---
+
+## Chain support
+
+A chain is supportable when two things hold: viem ships a definition for it,
+and SeaDrop v1 is deployed there. SeaDrop is deployed via CREATE2, so it lands
+at the same address — `0x00005ea00ac477b1030ce78506496e8c2de24bf5` — on every
+chain it reaches, with identical bytecode.
+
+| Chain | id | Native | SeaDrop |
+|---|---|---|---|
+| ethereum | 1 | ETH | present |
+| base | 8453 | ETH | present |
+| robinhood | 4663 | ETH | present |
+| shape | 360 | ETH | present |
+| ape_chain | 33139 | APE | present |
+| avalanche | 43114 | AVAX | present |
+| megaeth | — | — | **not deployed** |
+
+`megaeth` appears in OpenSea's feeds but SeaDrop is not deployed there, so
+there is nothing to call. It is the only chain in the feeds this bot cannot
+reach.
+
+Adding a chain is one entry in `src/chains.js`. Verify SeaDrop is present
+first:
+
+```sh
+cast code 0x00005ea00ac477b1030ce78506496e8c2de24bf5 --rpc-url <rpc>
+```
+
+Note that not every chain pays in ETH. Amounts are 18-decimal everywhere so the
+arithmetic is unchanged, but `nativeSymbol()` supplies the correct label —
+printing "ETH" on an APE-denominated mint would misstate the cost.
 
 ## How it works
 
