@@ -204,6 +204,7 @@ async function main() {
       return arm(slug, {
         keystore: ks(),
         explain: !flags['no-analysis'],
+        quiet: !!flags.quiet,
         quantity: Number(flags.quantity ?? 1),
         live: !!flags.live,
         yes: !!flags.yes,

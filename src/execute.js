@@ -60,7 +60,7 @@ export async function arm(slug, opts = {}) {
       throw new Error('Private key env var is set but is not a 0x-prefixed 32-byte key');
     }
     account = privateKeyToAccount(pk);
-    console.log('  WARNING   signing from a plaintext key in .env, not the keystore');
+    if (!opts.quiet) console.log('  WARNING   signing from a plaintext key in .env, not the keystore');
   } else {
     account = privateKeyToAccount(
       decryptKeystore(loadKeystore(ksPath), await promptPassword())
