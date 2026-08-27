@@ -1,141 +1,270 @@
-# opensea-mint-bot
+# automint
 
-Unattended SeaDrop mint executor. Phases 1-2 (watch + simulate) are built and
-verified; nothing can sign or send yet.
+An unattended mint executor for OpenSea SeaDrop drops, packaged as a
+[Zerion CLI](https://github.com/zeriontech) partner skill.
 
-## Design decisions
+It discovers open drops, scores them on observable market data, waits for the
+mint window, simulates the transaction, runs a set of safety rails, and only
+then mints. It runs as a background daemon, so it can act on a window that
+opens at 4am with nobody watching.
 
-| Decision | Choice | Why |
-|---|---|---|
-| Custody | Encrypted local keystore | Not yet implemented -- phase 3 |
-| Scope | SeaDrop v1 only | OpenSea supplies discovery, stages, price, caps |
-| Chain | Base first | Gas ~0.007 gwei, so a lost mint costs fractions of a cent |
-| Trigger | Scheduled off `startTime` | Start times are public; isolated behind one interface |
+Supports **Base**, **Ethereum**, and **Robinhood Chain**.
 
-## Why this is a scheduler, not a sniper
+---
 
-SeaDrop publishes `startTime` in advance, so there is no information edge and
-the race reduces to propagation latency -- which a Node CLI loses to operators
-submitting Flashbots bundles. The real edge is *presence*: never missing a 4am
-window, and executing correctly with rails. Many stages run for days
-(one observed live drop had a 13-day public window), so most of these are not
-races at all.
+## What this is, and is not
 
-## Verified facts
+**It is a scheduler, not a sniper.** SeaDrop publishes `startTime` in advance,
+so there is no information edge: everyone knows when a drop opens, and the race
+reduces to propagation latency — which a Node process loses to operators
+submitting Flashbots bundles from co-located nodes. If your goal is winning
+contested mints, this is the wrong architecture and optimising it will not
+help.
 
-Everything below was confirmed mechanically, not assumed:
+Its actual edge is **presence and correctness**: never missing a window,
+refusing bad transactions, and never double-minting. Many public stages run for
+days, so most are not races at all.
 
-- SeaDrop v1: `0x00005ea00ac477b1030ce78506496e8c2de24bf5` (21081 bytes on Base)
-- `mintPublic(address,address,address,uint256)` = selector `0x161ac21f`
-- OpenSea appends 4 attribution bytes (`0x3d958fe2`) past the ABI args
-- Locally built calldata is **byte-identical** to OpenSea's `/drops/{slug}/mint`
-- Onchain `getPublicDrop` matches OpenSea's stage data (price, window, cap)
-- `POST /drops/{slug}/mint` returns **409 while a stage is not active**, so it
-  can never sit in the hot path -- we build calldata ourselves
-- REST returns flat snake_case; the MCP server normalizes it. Do not assume
-  the MCP shape when calling REST.
+**The scorer ranks what is measurable. It does not predict value.** It can tell
+you a collection currently clears above its mint price and has real trading
+volume. It cannot tell you whether a drop will be worth anything later. Treat
+the score as a filter, not a judgement — see [Honest limits](#honest-limits).
 
-## Usage
+---
+
+## Install
 
 ```sh
-node bin/mint.js watch <slug> [--follow] [--interval <sec>]
-node bin/mint.js simulate <slug> --minter <address> [--quantity <n>]
+git clone git@github.com:penumbraaasol/automint.git
+cd automint
+npm install
+cp .env.example .env      # then add your OpenSea API key
 ```
 
-`simulate` builds the exact transaction and dry-runs it via `eth_call`. It
-decodes SeaDrop's custom errors, so a failure reports e.g.
-`NotActive(now, start, end) -- public stage is not open right now` rather than a
-raw selector.
+An OpenSea API key is required. A free one takes one command:
 
-## Phases 3-5 (built)
+```sh
+curl -X POST https://api.opensea.io/api/v2/auth/keys
+```
 
-**3. Armed executor** -- `mint arm` waits for the window, simulates, runs rails,
-then mints. Dry run is the default; `--live` is required to broadcast and
-prompts for confirmation unless `--yes`.
+Optional but recommended before live use — public RPCs rate-limit and add
+latency:
 
-**4. Rails** -- every guard runs *after* the window opens and immediately before
-signing, because price, gas and supply all move between arming and firing.
-Violations are collected and printed together rather than one per run.
+```sh
+BASE_RPC_URL=...
+ETH_RPC_URL=...
+ROBINHOOD_RPC_URL=...
+```
 
-| Rail | Flag |
+---
+
+## Quick start
+
+```sh
+# What is out there right now
+node bin/mint.js discover
+node bin/mint.js scan --limit 10
+
+# Should I want this one?
+node bin/mint.js analyze <slug>
+
+# Prove the transaction works without sending it
+node bin/mint.js simulate <slug> --minter 0xYourAddress
+
+# Create a wallet, fund it, then mint for real
+node bin/mint.js keygen
+node bin/mint.js arm <slug> --live --max-price 0.01 --cap 0.05
+```
+
+Every command that can spend is **dry run by default**. `--live` is required to
+broadcast.
+
+---
+
+## Commands
+
+| Command | What it does |
 |---|---|
-| Unit price ceiling | `--max-price <eth>` |
-| Gas price ceiling | `--max-gas-gwei <n>` |
-| Total cost ceiling | `--max-total <eth>` |
-| Lifetime spend cap | `--cap <eth>` |
-| Balance sufficiency | automatic |
-| chainId assertion | automatic |
-| Per-wallet cap | automatic (read onchain) |
-| One-shot / no double-mint | automatic (`.state/<slug>-<chainId>.json`) |
+| `discover` | Pull all three OpenSea drop feeds and list what is executable |
+| `scan` | Discover, enrich with market stats and supply, score, rank |
+| `analyze <slug>` | Reasoned verdict on one drop: for, against, and unknowable |
+| `watch <slug>` | Show stages; reconcile OpenSea's data against the contract |
+| `check <slug>` | Is this stage public, or does it need an allowlist proof |
+| `simulate <slug>` | Build the tx and dry-run it via `eth_call`. Never sends |
+| `arm <slug>` | Wait for the window, simulate, run rails, then mint |
+| `auto` | Discover → score → gate → mint, unsupervised |
+| `run` | `auto` on a loop, for the daemon |
+| `reconcile` | Resolve attempts stuck on `pending` against the chain |
+| `keygen` / `import` / `address` | Encrypted wallet management |
+| `watch-add` / `watch-list` / `watch-remove` | Persistent watchlist |
+| `status <slug>` | One-shot state for a drop |
 
-**5. Allowlist / gated stages** -- `classifyStage` splits stages into
-*prebuildable* (public) and *gated* (allowlist merkle proof, signed presale).
-Gated proofs exist only in the drop's backend -- no onchain source, no standard
-for deriving them -- so those fall back to OpenSea's endpoint at fire time and
-pay one round-trip. `mint check` reports which case applies.
+---
 
-### Waiting (heartbeat)
+## Safety rails
 
-`arm` never goes silent. While waiting it re-reads the contract and reports on
-an adaptive cadence -- sparse when the open is hours out, tightening as it
-approaches -- so you can always tell it is alive:
+Every rail runs **after** the window opens and immediately before signing,
+because price, gas and supply all move between arming and firing. Violations
+are collected and reported together rather than one per run.
 
-| Time to open | Heartbeat |
+| Rail | Flag | Default |
+|---|---|---|
+| Unit price ceiling | `--max-price <eth>` | off |
+| Gas price ceiling | `--max-gas-gwei <n>` | off |
+| Total cost ceiling | `--max-total <eth>` | off |
+| Lifetime spend cap | `--cap <eth>` | off |
+| Balance sufficiency | — | always |
+| chainId assertion | — | always |
+| Per-wallet cap | — | always, read onchain |
+| One-shot / no double-mint | — | always |
+
+Simulation is the rail that matters most: an `eth_call` against the exact
+calldata catches not-started, sold-out, wrong-price and not-eligible before any
+gas is spent. SeaDrop's custom errors are decoded, so a failure reports
+`NotActive(now, start, end)` rather than a raw selector.
+
+### Autonomous gates
+
+`auto` and `run` stack additional gates on top, because that is the only place
+the bot spends money on something a human did not name:
+
+| Gate | Behaviour |
 |---|---|
-| > 2h | every 30m |
-| > 30m | every 5m |
-| > 5m | every 1m |
-| > 1m | every 15s |
-| < 1m | every 5s |
+| `--live` required | dry run otherwise |
+| `--min-score <n>` | reject below threshold |
+| Confidence must be `measured` | `unknown` and `untested` refused outright |
+| Sold out | refused |
+| Affordable on that drop's chain | refused — funds do not travel |
+| Already minted | refused |
+| `--budget <eth>` | lifetime, survives state deletion |
 
-Each tick re-reads the authoritative onchain stage, because **creators move
-stages**. Sleeping blindly on a start time captured at arm-time means missing a
-window that shifts earlier, or waking into a `NotActive` revert if it shifts
-later. Drift is reported and the target updated:
+---
+
+## Running as a daemon
+
+```sh
+./daemon/botctl.sh install     # launchd agent; starts at login, restarts on crash
+./daemon/botctl.sh status      # is it alive
+./daemon/botctl.sh logs [n]    # what it has been doing
+./daemon/botctl.sh follow      # tail live
+./daemon/botctl.sh spend       # lifetime spend from the ledger
+./daemon/botctl.sh stop
+./daemon/botctl.sh uninstall
+```
+
+`install` fills the committed plist template with this machine's node and
+project paths, validates it, and loads it. macOS only.
+
+**A sleeping laptop does not mint.** launchd suspends the process when the
+machine sleeps and resumes it on wake. Measured over one 8-day run, a laptop
+that slept normally was awake for **26%** of the elapsed time. If uptime
+matters, run it somewhere that does not sleep, or hold sleep off with
+`caffeinate -s -i` while on AC power.
+
+---
+
+## How it works
 
 ```
-[02:54:15Z] START MOVED 2026-08-19 02:55:12Z -> 2026-08-19 02:54:15Z
-[02:54:15Z] PRICE CHANGED 0.001 -> 0.005 ETH
+discover   three OpenSea drop feeds (featured, upcoming, recently_minted)
+              ~105 drops; this is the entire discoverable universe, there is
+              no search endpoint
+   ↓
+score      enrich each with collection stats and remaining supply, then rank
+   ↓
+gate       reject sold out, unaffordable, already minted, or unmeasurable
+   ↓
+wait       sleep until startTime, re-reading the contract on a heartbeat in
+              case the creator moves the stage
+   ↓
+simulate   eth_call the exact calldata; decode any revert
+   ↓
+rails      all guards, reported together
+   ↓
+mint       sign locally and broadcast
 ```
 
-Two bounds keep a moving stage from hanging the bot forever: `--max-wait`
-(default 24h) and a retarget limit (default 20) that refuses to keep chasing a
-start time that keeps receding. Sub-5s jitter is ignored so clock noise does not
-spam the log.
+### Where Zerion fits
 
-### Custody
+Zerion CLI handles the money — funding, bridging, swapping, balance
+verification, and post-mint accounting. The bot handles the drop — timing,
+calldata, simulation, rails.
 
-Web3 Secret Storage v3 keystore (scrypt, aes-128-ctr, keccak256 MAC), verified
-against the official spec test vector -- so the file is readable by other
-wallets, not just this tool. `mint keygen` / `mint import` / `mint address`.
+The split is not stylistic. **Zerion cannot submit the mint itself.** Its
+chain-touching commands are `swap`, `bridge`, `send`, `consolidate`,
+`sign-message`, and `sign-typed-data`; none accepts arbitrary `to`/`data`/
+`value`. A SeaDrop `mintPublic()` call is not one of those shapes, so the mint
+signs from a local keystore while Zerion does everything around it.
 
-### Dry-run balance lending
+---
 
-A dry run on an unfunded wallet simulates with a lent balance via state
-override, so the simulation answers "would this mint be accepted?" separately
-from "is the wallet funded?". Conflating those makes dry runs useless before
-funding. Live runs never override.
+## Protocol notes
 
-## Verified
+Confirmed by execution against mainnet, not by assumption:
 
-- Keystore decrypts the official Web3 Secret Storage pbkdf2 vector; rejects a
-  wrong password on MAC mismatch; scrypt round-trips
-- Rails fire individually: max-price, max-gas, session cap, balance, one-shot
-- Scheduler sleeps, polls, and fires at the target instant (`--at`)
-- Stage classification handles public / signed_presale / allow_list / none
-- Heartbeat: retargets when the start moves earlier and fires immediately;
-  aborts on a receding start (retarget limit) and on `--max-wait`; sub-5s
-  jitter produces zero spurious drift lines
+- SeaDrop v1 lives at `0x00005ea00ac477b1030ce78506496e8c2de24bf5` on every
+  supported chain, with identical bytecode (21,081 bytes)
+- `mintPublic(address,address,address,uint256)` → selector `0x161ac21f`
+- OpenSea appends 4 attribution bytes (`0x3d958fe2`) past the ABI-encoded args
+- Locally built calldata is **byte-identical** to OpenSea's mint endpoint
+- `POST /drops/{slug}/mint` returns **409 while a stage is inactive**, so it can
+  never be prefetched and can never sit in the hot path. Calldata is built
+  locally instead
+- The REST API returns flat `snake_case`; the OpenSea MCP server normalises to
+  `camelCase`. Do not assume the MCP shape when calling REST
+- Custom errors decoded from selectors: `0x13da22f2` =
+  `NotActive(uint256,uint256,uint256)`, `0xe12d2314` =
+  `MintQuantityExceedsMaxSupply(uint256,uint256)`
 
-## Not verified
+### Data hazards
 
-- **The gated-stage path has never run against a live gated stage.** No drop in
-  the featured feed currently has a non-public active stage, so the OpenSea
-  proof fallback is implemented but unexercised end to end.
-- **Nothing has been broadcast.** No live mint has been performed.
-- Ethereum mainnet is untested; all runs were Base.
+Two OpenSea behaviours will mislead any integration:
 
-## Environment
+**The advertised floor is a listing, not a trade.** On thin collections a
+single optimistic listing produces an absurd floor. Two collections advertising
+a 1 ETH floor were actually clearing at 0.0015 ETH, or not trading at all.
+Scoring on the floor ranked both #1. This bot uses the realised clearing price
+(volume ÷ sales, 7d falling back to 30d) and trusts the floor only when the two
+agree within 3×.
 
-`.env` holds `OPENSEA_API_KEY`. Optional `BASE_RPC_URL` / `ETH_RPC_URL`
-override the public RPCs -- worth setting before live use.
+**A sold-out drop still reports `MINTING`.** Three of seventeen actionable
+drops in one scan were sold out, including the top-ranked pick. The only other
+symptom is a `MintQuantityExceedsMaxSupply` revert at simulation time — which
+an unattended daemon would rediscover every cycle forever. Remaining supply is
+now checked as a gate.
+
+---
+
+## Honest limits
+
+- **The scorer is backward-looking and manipulable.** Its inputs are public
+  listings and reported volume, both of which can be gamed. It ranks
+  observable data; it does not predict value.
+- **Gated stages are untested.** Allowlist merkle proofs and signed presales
+  are classified correctly, but the proof-fetching fallback has never run
+  against a live gated stage.
+- **Transactions are sent without an explicit priority fee.** This has confirmed
+  within a few blocks on quiet chains, but would stall when gas is contested.
+- **Keys are held locally.** The bot signs itself, so whatever the wallet holds
+  is what a bug can reach. Fund a dedicated wallet rather than pointing it at
+  one holding real value, and set `--cap`.
+- **macOS only** for the daemon. The CLI is portable; `botctl.sh` uses launchd.
+
+---
+
+## Security
+
+`.env`, `.keystore/`, `.state/`, `daemon/*.log`, and
+`.claude/settings.local.json` are gitignored and must never be committed.
+
+Prefer the encrypted keystore (`keygen` / `import`) over a plaintext key in
+`.env`. `import` reads the key from a hidden prompt so it never enters shell
+history. The keystore is Web3 Secret Storage v3 (scrypt, aes-128-ctr,
+keccak256 MAC), verified against the official specification test vector, so the
+file is portable to other wallets.
+
+---
+
+## Licence
+
+MIT

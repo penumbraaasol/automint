@@ -14,12 +14,21 @@ LOG="$HERE/automint.log"
 
 case "${1:-status}" in
   install)
+    PROJECT_DIR="$(cd "$HERE/.." && pwd)"
+    NODE="$(command -v node)"
+    [ -n "$NODE" ] || { echo "node not found on PATH"; exit 1; }
+
     mkdir -p "$HOME/Library/LaunchAgents"
-    cp "$PLIST" "$TARGET"
+    # The committed plist is a template; fill in this machine's paths.
+    sed -e "s|__NODE__|$NODE|g" -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" "$PLIST" > "$TARGET"
+    plutil -lint "$TARGET" >/dev/null || { echo "generated plist is invalid"; exit 1; }
+
     launchctl unload "$TARGET" 2>/dev/null || true
     launchctl load "$TARGET"
     echo "installed and started: $LABEL"
-    echo "logs: $LOG"
+    echo "  node    $NODE"
+    echo "  project $PROJECT_DIR"
+    echo "  logs    $LOG"
     ;;
   start)   launchctl load "$TARGET" && echo "started" ;;
   stop)    launchctl unload "$TARGET" && echo "stopped" ;;
