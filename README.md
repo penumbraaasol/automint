@@ -67,8 +67,8 @@ ROBINHOOD_RPC_URL=...
 node bin/mint.js discover
 node bin/mint.js scan --limit 10
 
-# Should I want this one?
-node bin/mint.js analyze <slug>
+# Should I want this one?  (slug or a pasted OpenSea URL)
+node bin/mint.js analyze https://opensea.io/collection/<slug>
 
 # Prove the transaction works without sending it
 node bin/mint.js simulate <slug> --minter 0xYourAddress
@@ -125,6 +125,25 @@ calldata catches not-started, sold-out, wrong-price and not-eligible before any
 gas is spent. SeaDrop's custom errors are decoded, so a failure reports
 `NotActive(now, start, end)` rather than a raw selector.
 
+### Verdicts
+
+`analyze` returns one of these, with the evidence on each side:
+
+| Verdict | Meaning |
+|---|---|
+| `CANNOT MINT` | sold out |
+| `BLOCKED` | gated stage, needs a proof we do not have |
+| `NO EXIT` | has traded, but not one live bid at any price |
+| `EXIT UNDERWATER` | best live bid is below the mint price |
+| `UNKNOWABLE` | costs real money, no trading data to justify it |
+| `POOR VALUE` | trades below mint on realized sales |
+| `REASONABLE PUNT` | free mint, downside bounded at gas |
+| `MARGINAL` / `DEFENSIBLE` | thin or favourable measurable edge |
+
+`arm` prints the verdict before minting. It does not block on it — when you
+name a drop, the decision is yours. `--no-analysis` skips it, `--quiet` drops
+the plaintext-key notice.
+
 ### Autonomous gates
 
 `auto` and `run` stack additional gates on top, because that is the only place
@@ -138,6 +157,8 @@ the bot spends money on something a human did not name:
 | Sold out | refused |
 | Affordable on that drop's chain | refused — funds do not travel |
 | Already minted | refused |
+| No live bids | refused — nothing to sell into |
+| Best bid below mint | refused — exit underwater |
 | `--budget <eth>` | lifetime, survives state deletion |
 
 ---

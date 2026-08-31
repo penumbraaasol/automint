@@ -124,6 +124,20 @@ zerion history 0xBotWalletAddress --chain base --limit 5
 zerion pnl 0xBotWalletAddress
 ```
 
+## The exit gate
+
+Autonomous mode refuses any drop with no live bids, or whose best live bid is
+below the mint price. This is the most important gate and the last one added:
+before it existed the bot minted 14 NFTs across 13 collections, and when the
+bid side was checked afterwards **every one scored negative** — seven with no
+bids at any price, six underwater by up to 19x.
+
+A floor is an ask, free to post. A collection offer is escrowed WETH someone
+will actually pay. Judge on the bid.
+
+Naming a drop explicitly bypasses this gate — `arm` reports the verdict and
+proceeds, because the decision is the user's.
+
 ## Common Blockers
 
 - **Zerion CLI cannot submit the mint itself.** Its chain-touching commands are
