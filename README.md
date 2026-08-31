@@ -1,16 +1,43 @@
-# automint
+<h1 align="center">automint</h1>
 
-An unattended mint executor for OpenSea SeaDrop drops, packaged as a
-[Zerion CLI](https://github.com/zeriontech) partner skill.
+<p align="center">
+  <strong>Unattended NFT minting for OpenSea SeaDrop drops.</strong><br>
+  Discovers drops, judges them on live market data, waits for the window,<br>
+  simulates, runs safety rails — then mints. With nobody watching.
+</p>
 
-It discovers open drops, scores them on observable market data, waits for the
-mint window, simulates the transaction, runs a set of safety rails, and only
-then mints. It runs as a background daemon, so it can act on a window that
-opens at 4am with nobody watching.
+<p align="center">
+  <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A520-339933?logo=node.js&logoColor=white">
+  <img alt="deps" src="https://img.shields.io/badge/dependencies-1-brightgreen">
+  <img alt="chains" src="https://img.shields.io/badge/chains-6-blue">
+  <img alt="licence" src="https://img.shields.io/badge/licence-MIT-lightgrey">
+</p>
 
-Supports **Ethereum**, **Base**, **Robinhood Chain**, **Shape**, **ApeChain**,
-and **Avalanche** — every chain OpenSea serves SeaDrop drops on where the
-protocol is actually deployed.
+```console
+$ automint analyze https://opensea.io/collection/some-drop
+
+Some Drop  (some-drop)
+  chain     base
+  price     0.0056 ETH        supply 128 / 4269
+  stage     public_sale -- opens in 3h 12m
+
+  VERDICT: EXIT UNDERWATER   (score -29.1, confidence measured)
+  The best live bid is 8.0x below the mint price. You would be buying
+  above the only price anyone is actually offering.
+
+  in favour
+    + capped supply, 4141 of 4269 left
+  against
+    - EXIT UNDERWATER: best live bid is only 0.0002 WETH ($0.50)
+    - thin bid book -- only 2 outstanding offer(s)
+```
+
+> **Built as a [Zerion CLI](https://github.com/zeriontech/zerion-ai) partner
+> skill.** Zerion handles the money — funding, bridging, balance checks, PnL.
+> automint handles the drop — timing, calldata, simulation, rails.
+
+**Chains:** Ethereum · Base · Robinhood · Shape · ApeChain · Avalanche —
+every chain OpenSea serves SeaDrop drops on where the protocol is deployed.
 
 ---
 
